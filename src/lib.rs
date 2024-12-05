@@ -8,17 +8,17 @@ use nix::unistd::{Uid, Gid, seteuid, setegid, getuid, geteuid};
 
 
 pub fn is_root() ->bool {
-    getuid().is_root()
+    geteuid().is_root()
 }
 
 pub fn change_root() -> Result<(), Box<dyn error::Error>> {
-    // root でない場合は変更できない
+    // uid が root でない場合は変更できない
     if !getuid().is_root() {
         return Err("don't have root permission".into());
     }
 
-    // 既に root euid である場合は何もしない
-    if geteuid().is_root() {
+    // 既に euid が root である場合は何もしない
+    if is_root() {
         return Ok(());
     }
 
@@ -30,8 +30,7 @@ pub fn change_root() -> Result<(), Box<dyn error::Error>> {
 }
 
 pub fn change_user() -> Result<(), Box<dyn error::Error>> {
-
-    if !geteuid().is_root() {
+    if !is_root() {
         return Ok(());
     }
 
@@ -80,3 +79,20 @@ where
     }
 }
 
+pub fn command_user<I, S>(program: S, args: I) -> Result<Output, Box<dyn error::Error>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    if !is_root() {
+        // root でなければそのまま実行
+        Ok(Command::new(program).args(args).output()?)
+    }
+    else {
+        // userに移行して実行
+        change_user()?;
+        let out = Ok(Command::new(program).args(args).output()?);
+        change_root()?;
+        out
+    }
+}
