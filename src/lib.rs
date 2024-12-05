@@ -4,16 +4,16 @@ use std::result::Result;
 use std::process::{Command, Output};
 use std::ffi::OsStr;
 use std::env;
-use nix::unistd::{Uid, Gid, seteuid, setegid, getuid, geteuid};
+use nix::unistd::{Uid, Gid, seteuid, setegid};
 
 
 pub fn is_root() ->bool {
-    geteuid().is_root()
+    Uid::effective().is_root()
 }
 
 pub fn change_root() -> Result<(), Box<dyn error::Error>> {
     // uid が root でない場合は変更できない
-    if !getuid().is_root() {
+    if !Uid::current().is_root() {
         return Err("don't have root permission".into());
     }
 
