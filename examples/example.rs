@@ -1,9 +1,7 @@
-
-
+use jelly_uidmng::*;
+use nix::sys::stat::stat;
 use std::error::Error;
 use std::result::Result;
-use nix::sys::stat::stat;
-use jelly_uidmng::*;
 
 fn assert_file_permission(file: &str, root: bool) {
     let stat = stat(file).unwrap();
@@ -50,7 +48,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     change_root()?;
     std::fs::write("test_root1.txt", "Hello")?;
     assert_file_permission("test_root1.txt", true);
-    
 
     command_root("touch", ["touch_root0.txt"])?;
     command_user("touch", ["touch_user0.txt"])?;
