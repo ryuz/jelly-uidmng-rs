@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     command_root("rm", ["test_root0.txt"])?;
     command_user("rm", ["test_user0.txt"])?;
-    command_user("rm", ["test_root1.txt"])?;
+    command_root("rm", ["test_root1.txt"])?;
     command_root("rm", ["touch_root0.txt"])?;
     command_user("rm", ["touch_user0.txt"])?;
     command_root("rm", ["touch_root1.txt"])?;
