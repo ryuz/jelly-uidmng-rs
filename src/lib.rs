@@ -2,7 +2,7 @@ use nix::unistd::{setegid, seteuid, Gid, Uid};
 use std::env;
 use std::error;
 use std::ffi::OsStr;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, Output};
 use std::result::Result;
 
 pub fn is_root() -> bool {
@@ -51,43 +51,44 @@ pub fn change_user() -> Result<(), Box<dyn error::Error>> {
     Ok(())
 }
 
-pub fn command_root<I, S>(program: S, args: I) -> Result<ExitStatus, Box<dyn error::Error>>
+
+pub fn command_root<I, S>(program: S, args: I) -> Result<Output, Box<dyn error::Error>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     if is_root() {
         // root であればそのまま実行
-        Ok(Command::new(program).args(args).status()?)
+        Ok(Command::new(program).args(args).output()?)
     } else {
         // userモードの場合
         if change_root().is_ok() {
             // root に変更できた場合はそのまま実行してuserモードに戻す
-            let out = Ok(Command::new(program).args(args).status()?);
+            let out = Ok(Command::new(program).args(args).output()?);
             change_user()?;
             out
         } else {
             // root でない場合は sudo で実行
             let mut command_args: Vec<S> = vec![program];
             command_args.extend(args);
-            Ok(Command::new("sudo").args(command_args).status()?)
+            Ok(Command::new("sudo").args(command_args).output()?)
         }
     }
 }
 
-pub fn command_user<I, S>(program: S, args: I) -> Result<ExitStatus, Box<dyn error::Error>>
+pub fn command_user<I, S>(program: S, args: I) -> Result<Output, Box<dyn error::Error>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     if !is_root() {
         // root でなければそのまま実行
-        Ok(Command::new(program).args(args).status()?)
+        Ok(Command::new(program).args(args).output()?)
     } else {
         // userに移行して実行
         change_user()?;
-        let status = Ok(Command::new(program).args(args).status()?);
+        let out = Ok(Command::new(program).args(args).output()?);
         change_root()?;
-        status
+        out
     }
 }
