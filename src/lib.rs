@@ -1,15 +1,17 @@
-use nix::unistd::{setegid, seteuid, Gid, Uid};
-use std::env;
-use std::error;
-use std::ffi::OsStr;
-use std::process::{Command, Output};
 use std::result::Result;
+use std::error::Error;
+use std::env;
+use std::process::{Command, Output, Stdio};
+use std::io::Write;
+use std::ffi::OsStr;
+use nix::unistd::{setegid, seteuid, Gid, Uid};
+
 
 pub fn is_root() -> bool {
     Uid::effective().is_root()
 }
 
-pub fn change_root() -> Result<(), Box<dyn error::Error>> {
+pub fn change_root() -> Result<(), Box<dyn Error>> {
     // uid が root でない場合は変更できない
     if !Uid::current().is_root() {
         return Err("don't have root permission".into());
@@ -27,7 +29,7 @@ pub fn change_root() -> Result<(), Box<dyn error::Error>> {
     Ok(())
 }
 
-pub fn change_user() -> Result<(), Box<dyn error::Error>> {
+pub fn change_user() -> Result<(), Box<dyn Error>> {
     if !is_root() {
         return Ok(());
     }
@@ -52,7 +54,7 @@ pub fn change_user() -> Result<(), Box<dyn error::Error>> {
 }
 
 
-pub fn command_root<I, S>(program: S, args: I) -> Result<Output, Box<dyn error::Error>>
+pub fn command_root<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -76,7 +78,7 @@ where
     }
 }
 
-pub fn command_user<I, S>(program: S, args: I) -> Result<Output, Box<dyn error::Error>>
+pub fn command_user<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -90,5 +92,71 @@ where
         let out = Ok(Command::new(program).args(args).output()?);
         change_root()?;
         out
+    }
+}
+
+
+/// Writes binary data to a file using `sudo` permissions.
+///
+/// This function uses the `sudo` command and the `tee` utility to write the provided binary data
+/// to the specified file. It requires that the executing user has sudo privileges, and the 
+/// target file is writable with elevated permissions.
+///
+/// # Arguments
+///
+/// * `filename` - A string slice that holds the path of the file to be written to.
+/// * `data` - A reference to a `Vec<u8>` containing the binary data to write.
+///
+/// # Returns
+///
+/// * `Ok(())` if the file was written successfully.
+/// * `Err(Box<dyn Error>)` if an error occurred during the operation.
+///
+/// # Errors
+///
+/// This function will return an error in the following cases:
+/// * The `sudo` command fails or is unavailable.
+/// * The `tee` command fails to write the data to the file.
+/// * The provided file path is invalid or inaccessible with the required permissions.
+///
+/// # Examples
+///
+/// ```
+/// use std::error::Error;
+/// 
+/// fn main() -> Result<(), Box<dyn Error>> {
+///     let data = vec![72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 10]; // "Hello, World!\n"
+///     let filename = "/tmp/test_output.txt";
+/// 
+///     jelly_uidmng::write_root(filename, &data)?;
+///     println!("File written successfully: {}", filename);
+///     Ok(())
+/// }
+///```
+pub fn write_root(filename: &str, data: &Vec<u8>) -> Result<(), Box<dyn Error>> {
+    if is_root() {
+        // root であればそのまま書き込む
+        std::fs::write(filename, data)?;
+        Ok(())
+    }
+    else {
+        // 標準入力を `tee` に渡してファイルに書き込む
+        let mut child = Command::new("sudo")
+            .arg("tee")
+            .arg(filename)
+            .stdin(Stdio::piped())
+            .spawn()?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(data)?; // データを書き込む
+        }
+
+        let status = child.wait()?; // プロセスが終了するのを待つ
+
+        if status.success() {
+            Ok(()) // 成功時は Ok を返す
+        } else {
+            Err(format!("Failed to write to file: {}", filename).into()) // エラー時はエラーメッセージを返す
+        }
     }
 }
