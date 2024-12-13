@@ -100,19 +100,6 @@ pub fn change_root() -> Result<(), Box<dyn Error>> {
 ///     }
 /// }
 /// ```
-/// fn main() {
-///     if jelly_uidmng::change_root().is_ok() {
-///         jelly_uidmng::change_user();
-///         println!("Changed to user");
-///         assert!(!jelly_uidmng::is_root());
-///     }
-///     else {
-///         jelly_uidmng::change_user();
-///         println!("Already user mode");
-///         assert!(!jelly_uidmng::is_root());
-///     }
-/// }
-/// ```
 pub fn change_user() -> Result<(), Box<dyn Error>> {
     if !is_root() {
         return Ok(());
@@ -250,14 +237,14 @@ where
 
 /// Writes binary data to a file using `sudo` permissions.
 ///
-/// This function uses the `sudo` command and the `tee` utility to write the provided binary data
+/// This function uses the `sudo` command and the `cat` utility to write the provided binary data
 /// to the specified file. It requires that the executing user has sudo privileges, and the
 /// target file is writable with elevated permissions.
 ///
 /// # Arguments
 ///
 /// * `filename` - A string slice that holds the path of the file to be written to.
-/// * `data` - A reference to a `Vec<u8>` containing the binary data to write.
+/// * `data` - A reference to a `&[u8]` containing the binary data to write.
 ///
 /// # Returns
 ///
@@ -268,7 +255,7 @@ where
 ///
 /// This function will return an error in the following cases:
 /// * The `sudo` command fails or is unavailable.
-/// * The `tee` command fails to write the data to the file.
+/// * The `cat` command fails to write the data to the file.
 /// * The provided file path is invalid or inaccessible with the required permissions.
 ///
 /// # Examples
@@ -285,16 +272,17 @@ where
 ///     Ok(())
 /// }
 ///```
-pub fn write_root(filename: &str, data: &Vec<u8>) -> Result<(), Box<dyn Error>> {
+pub fn write_root(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     if is_root() {
         // root であればそのまま書き込む
         std::fs::write(filename, data)?;
         Ok(())
     } else {
-        // 標準入力を `tee` に渡してファイルに書き込む
+        // 標準入力を `cat` に渡してファイルに書き込む
         let mut child = Command::new("sudo")
-            .arg("tee")
-            .arg(filename)
+            .arg("sh")
+            .arg("-c")
+            .arg(format!("cat > {}", filename))
             .stdin(Stdio::piped())
             .spawn()?;
 
