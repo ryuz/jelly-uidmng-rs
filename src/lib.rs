@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-static ALLOW_SUDO: AtomicBool = AtomicBool::new(true);
+static ALLOW_SUDO: AtomicBool = AtomicBool::new(false);
 
 /// Sets whether the use of sudo is allowed.
 pub fn set_allow_sudo(value: bool) {
@@ -315,6 +315,7 @@ mod tests {
     #[test]
     fn test_command() -> Result<(), Box<dyn Error>> {
         if !is_root() {
+            set_allow_sudo(true);
             command_root("touch", ["/tmp/touch_root0.txt"])?;
             command_user("touch", ["/tmp/touch_user0.txt"])?;
             command_root("touch", ["/tmp/touch_root1.txt"])?;
