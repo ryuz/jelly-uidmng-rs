@@ -365,7 +365,7 @@ mod tests {
         write_root(&file_name, &write_data)?;
         assert_file_permission(&file_name, true);
         command_try("chmod", ["700", &file_name])?;
-        
+
         let result = read_user(&file_name);
         print!("{:?}", result);
         assert!(result.is_err());
@@ -411,7 +411,7 @@ mod tests {
             assert!(result.is_ok());
             let read_data = result.unwrap();
             assert_eq!(write_data, read_data);
-    
+
             let result = read_try(&file_name);
             assert!(result.is_ok());
             let read_data = result.unwrap();
