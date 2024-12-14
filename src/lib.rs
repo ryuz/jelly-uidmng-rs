@@ -349,6 +349,8 @@ mod tests {
         assert_file_permission(&file_name, false);
         let read_data = read_user(&file_name)?;
         assert_eq!(write_data, read_data);
+
+        command_try("rm", [file_name])?;
         Ok(())
     }
 
@@ -383,6 +385,40 @@ mod tests {
         let read_data = result.unwrap();
         assert_eq!(write_data, read_data);
 
+        command_try("rm", [file_name])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_allow_sudo() -> Result<(), Box<dyn Error>> {
+        if !has_root() && !is_root() {
+            let file_name = "/tmp/test_root_file.txt";
+            let write_data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            set_allow_sudo(true);
+            write_root(&file_name, &write_data)?;
+            assert_file_permission(&file_name, true);
+            command_try("chmod", ["700", &file_name])?;
+
+            set_allow_sudo(false);
+            let result = read_root(&file_name);
+            assert!(result.is_err());
+            let result = read_try(&file_name);
+            assert!(result.is_err());
+
+            set_allow_sudo(true);
+            let result = read_root(&file_name);
+            assert!(result.is_ok());
+            let read_data = result.unwrap();
+            assert_eq!(write_data, read_data);
+    
+            let result = read_try(&file_name);
+            assert!(result.is_ok());
+            let read_data = result.unwrap();
+            assert_eq!(write_data, read_data);
+
+            command_try("rm", [file_name])?;
+        }
         Ok(())
     }
 }
