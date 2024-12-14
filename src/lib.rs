@@ -5,60 +5,34 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::result::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static ALLOW_SUDO: AtomicBool = AtomicBool::new(true);
+
+/// Sets whether the use of sudo is allowed.
+pub fn set_allow_sudo(value: bool) {
+    ALLOW_SUDO.store(value, Ordering::SeqCst);
+}
+
+/// Returns whether the use of sudo is allowed.
+pub fn allow_sudo() -> bool {
+    ALLOW_SUDO.load(Ordering::SeqCst)
+}
 
 /// Checks if the current effective user ID (euid) is root.
-///
-/// This function determines whether the current process is running with root privileges
-/// by checking the effective user ID.
-///
-/// # Returns
-///
-/// * `true` if the effective user ID is root.
-/// * `false` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// fn main() {
-///     if jelly_uidmng::is_root() {
-///         println!("Running as root");
-///     } else {
-///         println!("Not running as root");
-///     }
-/// }
-/// ```
 pub fn is_root() -> bool {
     Uid::effective().is_root()
 }
 
+/// Checks if the current real user ID (uid) is root.
+pub fn has_root() -> bool {
+    Uid::current().is_root()
+}
+
 /// Changes to root.
-///
-/// This function attempts to change to root mode
-/// by checking the effective user ID.
-///
-/// # Returns
-///
-/// * `Ok(())` if the effective user ID is successfully changed to root.
-/// * `Err(Box<dyn Error>)` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// fn main() {
-///     jelly_uidmng::change_user();
-///     if jelly_uidmng::change_root().is_ok() {
-///        println!("Changed to root");
-///        assert!(jelly_uidmng::is_root());
-///     }
-///     else {
-///        println!("Not changed to root");
-///        assert!(!jelly_uidmng::is_root());
-///     }
-/// }
-/// ```
 pub fn change_root() -> Result<(), Box<dyn Error>> {
-    // uid が root でない場合は変更できない
-    if !Uid::current().is_root() {
+    // root 権限を保有していないと変更できない
+    if !has_root() {
         return Err("don't have root permission".into());
     }
 
@@ -75,32 +49,8 @@ pub fn change_root() -> Result<(), Box<dyn Error>> {
 }
 
 /// Changes to user.
-///
-/// This function attempts to change to user mode
-/// by checking the effective user ID.
-///
-/// # Returns
-///
-/// * `Ok(())` if the effective user ID is successfully changed to user.
-/// * `Err(Box<dyn Error>)` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// fn main() {
-///     if jelly_uidmng::change_root().is_ok() {
-///         jelly_uidmng::change_user();
-///         println!("Changed to user");
-///         assert!(!jelly_uidmng::is_root());
-///     }
-///     else {
-///         jelly_uidmng::change_user();
-///         println!("Already user mode");
-///         assert!(!jelly_uidmng::is_root());
-///     }
-/// }
-/// ```
 pub fn change_user() -> Result<(), Box<dyn Error>> {
+    // 既に euid が 非root である場合は何もしない
     if !is_root() {
         return Ok(());
     }
@@ -124,100 +74,28 @@ pub fn change_user() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Executes a command with root privileges.
-///
-/// This function attempts to execute a given command with the provided arguments as root.
-/// If the current effective user ID (euid) is not root, it temporarily changes to root,
-/// executes the command, and then reverts back to the original user.
-///
-/// # Arguments
-///
-/// * `program` - A string slice that holds the name of the program to be executed.
-/// * `args` - An iterator over the arguments to pass to the program.
-///
-/// # Returns
-///
-/// * `Ok(Output)` containing the output of the executed command.
-/// * `Err(Box<dyn Error>)` if an error occurred during the operation.
-///
-/// # Errors
-///
-/// This function will return an error in the following cases:
-/// * Changing the effective user ID (euid) or group ID (egid) fails.
-/// * The command execution fails.
-///
-/// # Examples
-///
-/// ```
-/// use std::error::Error;
-/// use std::process::Output;
-///
-/// fn main() -> Result<(), Box<dyn Error>> {
-///     let output: Output = jelly_uidmng::command_root("ls", ["-l", "/tmp"])?;
-///     println!("Command executed successfully: {}", String::from_utf8_lossy(&output.stdout));
-///     Ok(())
-/// }
-/// ```
-pub fn command_root<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
+/// Executes a command with the given program and arguments.
+pub fn command<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    if is_root() {
-        // root であればそのまま実行
-        Ok(Command::new(program).args(args).output()?)
-    } else {
-        // userモードの場合
-        if change_root().is_ok() {
-            // root に変更できた場合はそのまま実行してuserモードに戻す
-            let out = Ok(Command::new(program).args(args).output()?);
-            change_user()?;
-            out
-        } else {
-            // root でない場合は sudo で実行
-            let mut command_args: Vec<S> = vec![program];
-            command_args.extend(args);
-            Ok(Command::new("sudo").args(command_args).output()?)
-        }
-    }
+    // コマンド実行して結果を返す
+    Ok(Command::new(program).args(args).output()?)
+}
+
+/// Executes a command with `sudo` using the given program and arguments.
+pub fn command_sudo<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command_args: Vec<S> = vec![program];
+    command_args.extend(args);
+    Ok(Command::new("sudo").args(command_args).output()?)
 }
 
 /// Executes a command in user mode.
-///
-/// This function attempts to execute a given command with the provided arguments in user mode.
-/// If the current effective user ID (euid) is root, it temporarily changes to the user specified
-/// by the `SUDO_UID` and `SUDO_GID` environment variables, executes the command, and then
-/// reverts back to root.
-///
-/// # Arguments
-///
-/// * `program` - A string slice that holds the name of the program to be executed.
-/// * `args` - An iterator over the arguments to pass to the program.
-///
-/// # Returns
-///
-/// * `Ok(Output)` containing the output of the executed command.
-/// * `Err(Box<dyn Error>)` if an error occurred during the operation.
-///
-/// # Errors
-///
-/// This function will return an error in the following cases:
-/// * The `SUDO_UID` or `SUDO_GID` environment variables are not set or invalid.
-/// * Changing the effective user ID (euid) or group ID (egid) fails.
-/// * The command execution fails.
-///
-/// # Examples
-///
-/// ```
-/// use std::error::Error;
-/// use std::process::Output;
-///
-/// fn main() -> Result<(), Box<dyn Error>> {
-///     let output: Output = jelly_uidmng::command_user("ls", ["-l", "/tmp"])?;
-///     println!("Command executed successfully: {}", String::from_utf8_lossy(&output.stdout));
-///     Ok(())
-/// }
-/// ```
 pub fn command_user<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,
@@ -225,129 +103,275 @@ where
 {
     if !is_root() {
         // root でなければそのまま実行
-        Ok(Command::new(program).args(args).output()?)
+        command(program, args)
     } else {
         // userに移行して実行
         change_user()?;
-        let out = Ok(Command::new(program).args(args).output()?);
+        let result = command(program, args);
         change_root()?;
-        out
+        result
+    }
+}
+
+/// Executes a command with root privileges.
+pub fn command_root<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    if is_root() {
+        // root であればそのまま実行
+        command(program, args)
+    } else {
+        // userモードの場合
+        if change_root().is_ok() {
+            // root に変更できた場合はそのまま実行してuserモードに戻す
+            let result = command(program, args);
+            change_user()?;
+            result
+        } else {
+            if allow_sudo() {
+                // root に変更できない場合は sudo で実行
+                command_sudo(program, args)
+            } else {
+                Err("don't have root permission".into())
+            }
+        }
+    }
+}
+
+/// Executes a command and tries to use root permissions if the initial execution fails.
+pub fn command_try<I, S>(program: S, args: I) -> Result<Output, Box<dyn Error>>
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<OsStr> + Clone,
+{
+    let result = command(program.clone(), args.clone());
+    if let Ok(output) = &result {
+        if output.status.success() {
+            return result;
+        }
+    }
+
+    if !is_root() {
+        command_root(program, args)
+    } else {
+        result
+    }
+}
+
+/// Writes binary data to a file.
+pub fn write(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    std::fs::write(filename, data)?;
+    Ok(())
+}
+
+/// Reads binary data from a file.
+pub fn write_sudo(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    // 標準入力を `cat` に渡してファイルに書き込む
+    let mut child = Command::new("sudo")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!("cat > {}", filename))
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(data)?; // データを書き込む
+    } else {
+        return Err("Failed to write to file".into());
+    }
+
+    // プロセスが終了するのを待つ
+    let status = child.wait()?;
+    if status.success() {
+        Ok(()) // 成功時は Ok を返す
+    } else {
+        Err(format!("Failed to write to file: {}", filename).into()) // エラー時はエラーメッセージを返す
+    }
+}
+
+/// Writes binary data to a file using user permissions.
+pub fn write_user(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    if !is_root() {
+        write(filename, data)
+    } else {
+        change_user()?;
+        let result = write(filename, data);
+        change_root()?;
+        result
     }
 }
 
 /// Writes binary data to a file using `sudo` permissions.
-///
-/// This function uses the `sudo` command and the `cat` utility to write the provided binary data
-/// to the specified file. It requires that the executing user has sudo privileges, and the
-/// target file is writable with elevated permissions.
-///
-/// # Arguments
-///
-/// * `filename` - A string slice that holds the path of the file to be written to.
-/// * `data` - A reference to a `&[u8]` containing the binary data to write.
-///
-/// # Returns
-///
-/// * `Ok(())` if the file was written successfully.
-/// * `Err(Box<dyn Error>)` if an error occurred during the operation.
-///
-/// # Errors
-///
-/// This function will return an error in the following cases:
-/// * The `sudo` command fails or is unavailable.
-/// * The `cat` command fails to write the data to the file.
-/// * The provided file path is invalid or inaccessible with the required permissions.
-///
-/// # Examples
-///
-/// ```
-/// use std::error::Error;
-///
-/// fn main() -> Result<(), Box<dyn Error>> {
-///     let data = vec![72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 10]; // "Hello, World!\n"
-///     let filename = "/tmp/test_output.txt";
-///
-///     jelly_uidmng::write_root(filename, &data)?;
-///     println!("File written successfully: {}", filename);
-///     Ok(())
-/// }
-///```
 pub fn write_root(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     if is_root() {
         // root であればそのまま書き込む
-        std::fs::write(filename, data)?;
-        Ok(())
+        write(filename, data)
     } else {
-        // 標準入力を `cat` に渡してファイルに書き込む
-        let mut child = Command::new("sudo")
-            .arg("sh")
-            .arg("-c")
-            .arg(format!("cat > {}", filename))
-            .stdin(Stdio::piped())
-            .spawn()?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(data)?; // データを書き込む
-        }
-
-        let status = child.wait()?; // プロセスが終了するのを待つ
-
-        if status.success() {
-            Ok(()) // 成功時は Ok を返す
+        if has_root() {
+            change_root()?;
+            let result = write(filename, data);
+            change_root()?;
+            result
         } else {
-            Err(format!("Failed to write to file: {}", filename).into()) // エラー時はエラーメッセージを返す
+            if allow_sudo() {
+                write_sudo(filename, data)
+            } else {
+                Err("don't have root permission".into())
+            }
         }
     }
 }
 
+/// Writes binary data to a file and tries to use root permissions if the initial write fails.
+pub fn write_try(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    let result = write(filename, data);
+    if result.is_err() && !is_root() {
+        write_root(filename, data)
+    } else {
+        result
+    }
+}
+
+/// Reads binary data from a file.
+pub fn read(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let data = std::fs::read(filename)?;
+    Ok(data)
+}
+
+/// Reads binary data from a file using user permissions.
+pub fn read_sudo(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    // `cat` コマンドを使ってファイルを読み込む
+    let output = command_sudo("cat", [filename])?;
+    if output.status.success() {
+        Ok(output.stdout) // 成功時はデータを返す
+    } else {
+        Err(format!("Failed to read from file: {}", filename).into()) // エラー時はエラーメッセージを返す
+    }
+}
+
+/// Reads binary data from a file using user permissions.
+pub fn read_user(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    if !is_root() {
+        read(filename)
+    } else {
+        change_user()?;
+        let result = read(filename);
+        change_root()?;
+        result
+    }
+}
+
 /// Reads binary data from a file using `sudo` permissions.
-///
-/// This function uses the `sudo` command and the `cat` utility to read the binary data
-/// from the specified file. It requires that the executing user has sudo privileges, and the
-/// target file is readable with elevated permissions.
-///
-/// # Arguments
-///
-/// * `filename` - A string slice that holds the path of the file to be read.
-///
-/// # Returns
-///
-/// * `Ok(Vec<u8>)` containing the binary data read from the file.
-/// * `Err(Box<dyn Error>)` if an error occurred during the operation.
-///
-/// # Errors
-///
-/// This function will return an error in the following cases:
-/// * The `sudo` command fails or is unavailable.
-/// * The `cat` command fails to read the data from the file.
-/// * The provided file path is invalid or inaccessible with the required permissions.
-///
-/// # Examples
-///
-/// ```
-/// use std::error::Error;
-///
-/// fn main() -> Result<(), Box<dyn Error>> {
-///     let filename = "/tmp/test_output.txt";
-///
-///     let data = jelly_uidmng::read_root(filename)?;
-///     println!("File read successfully: {:?}", data);
-///     Ok(())
-/// }
-///```
 pub fn read_root(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     if is_root() {
         // root であればそのまま読み込む
-        let data = std::fs::read(filename)?;
-        Ok(data)
+        read(filename)
     } else {
-        // `cat` コマンドを使ってファイルを読み込む
-        let output = Command::new("sudo").arg("cat").arg(filename).output()?;
-
-        if output.status.success() {
-            Ok(output.stdout) // 成功時はデータを返す
+        if has_root() {
+            change_root()?;
+            let result = read(filename);
+            change_root()?;
+            result
         } else {
-            Err(format!("Failed to read from file: {}", filename).into()) // エラー時はエラーメッセージを返す
+            if allow_sudo() {
+                read_sudo(filename)
+            } else {
+                Err("don't have root permission".into())
+            }
         }
+    }
+}
+
+/// Reads binary data from a file and tries to use root permissions if the initial read fails.
+pub fn read_try(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let result = read(filename);
+    if result.is_err() && !is_root() {
+        read_root(filename)
+    } else {
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::stat::stat;
+    use std::error::Error;
+    use std::process::Output;
+
+    fn assert_file_permission(file: &str, root: bool) {
+        println!("check file permission : {}", file);
+        let stat = stat(file).unwrap();
+        if root {
+            assert_eq!(stat.st_uid, 0);
+            assert_eq!(stat.st_gid, 0);
+        } else {
+            assert_ne!(stat.st_uid, 0);
+            assert_ne!(stat.st_gid, 0);
+        }
+    }
+
+    #[test]
+    fn test_command() -> Result<(), Box<dyn Error>> {
+        if !is_root() {
+            command_root("touch", ["/tmp/touch_root0.txt"])?;
+            command_user("touch", ["/tmp/touch_user0.txt"])?;
+            command_root("touch", ["/tmp/touch_root1.txt"])?;
+            command_user("touch", ["/tmp/touch_user1.txt"])?;
+            assert_file_permission("/tmp/touch_root0.txt", true);
+            assert_file_permission("/tmp/touch_user0.txt", false);
+            assert_file_permission("/tmp/touch_root1.txt", true);
+            assert_file_permission("/tmp/touch_user1.txt", false);
+            command_root("rm", ["/tmp/touch_root0.txt"])?;
+            command_user("rm", ["/tmp/touch_user0.txt"])?;
+            command_root("rm", ["/tmp/touch_root1.txt"])?;
+            command_user("rm", ["/tmp/touch_user1.txt"])?;
+        }
+        return Ok(());
+    }
+
+    #[test]
+    fn test_command_sudo() -> Result<(), Box<dyn Error>> {
+        let output: Output = command_sudo("echo", ["Hello, world!"])?;
+        println!("Output: {:?}", output);
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_user() -> Result<(), Box<dyn Error>> {
+        let file_name = "/tmp/test_write_user.txt";
+        let write_data = vec![
+            72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 10,
+        ]; // "Hello, World!\n"
+
+        write_user(&file_name, &write_data)?;
+        assert_file_permission(&file_name, false);
+        let read_data = read_user(&file_name)?;
+        assert_eq!(write_data, read_data);
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_root() -> Result<(), Box<dyn Error>> {
+        set_allow_sudo(true);
+
+        let file_name = "/tmp/test_write_root.txt";
+        let write_data = vec![
+            72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 10,
+        ]; // "Hello, World!\n"
+        write_root(&file_name, &write_data)?;
+        assert_file_permission(&file_name, true);
+        command_try("chmod", ["700", &file_name])?;
+
+        let result = read_user(&file_name);
+        print!("{:?}", result);
+        assert!(result.is_err());
+        let result = read_root(&file_name);
+        assert!(result.is_ok());
+        let read_data = result.unwrap();
+        assert_eq!(write_data, read_data);
+
+        Ok(())
     }
 }
