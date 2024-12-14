@@ -2,7 +2,7 @@ use std::error::Error;
 use std::result::Result;
 
 fn main() -> Result<(), Box<dyn Error>> {
-//  jelly_uidmng::set_allow_sudo(false);
+    jelly_uidmng::set_allow_sudo(true);
 
     let filename = "/tmp/test_output.txt";
 
