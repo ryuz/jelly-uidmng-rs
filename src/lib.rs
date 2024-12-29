@@ -160,13 +160,73 @@ where
     }
 }
 
+/// Reads binary data from a file.
+pub fn read(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let data = std::fs::read(filename)?;
+    Ok(data)
+}
+
+/// Reads binary data from a file using user permissions.
+pub fn read_sudo(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    // `cat` コマンドを使ってファイルを読み込む
+    let output = command_sudo("cat", [filename])?;
+    if output.status.success() {
+        Ok(output.stdout) // 成功時はデータを返す
+    } else {
+        Err(format!("Failed to read from file: {}", filename).into()) // エラー時はエラーメッセージを返す
+    }
+}
+
+/// Reads binary data from a file using user permissions.
+pub fn read_user(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    if !is_root() {
+        read(filename)
+    } else {
+        change_user()?;
+        let result = read(filename);
+        change_root()?;
+        result
+    }
+}
+
+/// Reads binary data from a file using `sudo` permissions.
+pub fn read_root(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    if is_root() {
+        // root であればそのまま読み込む
+        read(filename)
+    } else {
+        if has_root() {
+            change_root()?;
+            let result = read(filename);
+            change_root()?;
+            result
+        } else {
+            if allow_sudo() {
+                read_sudo(filename)
+            } else {
+                Err("don't have root permission".into())
+            }
+        }
+    }
+}
+
+/// Reads binary data from a file and tries to use root permissions if the initial read fails.
+pub fn read_try(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let result = read(filename);
+    if result.is_err() && !is_root() {
+        read_root(filename)
+    } else {
+        result
+    }
+}
+
 /// Writes binary data to a file.
 pub fn write(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     std::fs::write(filename, data)?;
     Ok(())
 }
 
-/// Reads binary data from a file.
+/// Writes binary data to a file using `sudo` permissions.
 pub fn write_sudo(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     // 標準入力を `cat` に渡してファイルに書き込む
     let mut child = Command::new("sudo")
@@ -233,49 +293,63 @@ pub fn write_try(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Reads binary data from a file.
-pub fn read(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    let data = std::fs::read(filename)?;
-    Ok(data)
+/// Append binary data to a file.
+pub fn append(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(filename)?;
+    file.write_all(data)?;
+    Ok(())
 }
 
-/// Reads binary data from a file using user permissions.
-pub fn read_sudo(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    // `cat` コマンドを使ってファイルを読み込む
-    let output = command_sudo("cat", [filename])?;
-    if output.status.success() {
-        Ok(output.stdout) // 成功時はデータを返す
+/// Append binary data to a file using `sudo` permissions.
+pub fn append_sudo(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    // 標準入力を `cat` に渡してファイルに書き込む
+    let mut child = Command::new("sudo")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!("cat >> {}", filename))
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(data)?; // データを書き込む
     } else {
-        Err(format!("Failed to read from file: {}", filename).into()) // エラー時はエラーメッセージを返す
+        return Err("Failed to append to file".into());
+    }
+
+    // プロセスが終了するのを待つ
+    let status = child.wait()?;
+    if status.success() {
+        Ok(()) // 成功時は Ok を返す
+    } else {
+        Err(format!("Failed to write to file: {}", filename).into()) // エラー時はエラーメッセージを返す
     }
 }
 
-/// Reads binary data from a file using user permissions.
-pub fn read_user(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+/// Append binary data to a file using user permissions.
+pub fn append_user(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     if !is_root() {
-        read(filename)
+        append(filename, data)
     } else {
         change_user()?;
-        let result = read(filename);
+        let result = append(filename, data);
         change_root()?;
         result
     }
 }
 
-/// Reads binary data from a file using `sudo` permissions.
-pub fn read_root(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+/// Append binary data to a file using `sudo` permissions.
+pub fn append_root(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
     if is_root() {
-        // root であればそのまま読み込む
-        read(filename)
+        // root であればそのまま書き込む
+        append(filename, data)
     } else {
         if has_root() {
             change_root()?;
-            let result = read(filename);
+            let result = write(filename, data);
             change_root()?;
             result
         } else {
             if allow_sudo() {
-                read_sudo(filename)
+                append_sudo(filename, data)
             } else {
                 Err("don't have root permission".into())
             }
@@ -283,11 +357,11 @@ pub fn read_root(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     }
 }
 
-/// Reads binary data from a file and tries to use root permissions if the initial read fails.
-pub fn read_try(filename: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-    let result = read(filename);
+/// Append binary data to a file and tries to use root permissions if the initial write fails.
+pub fn append_try(filename: &str, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    let result = append(filename, data);
     if result.is_err() && !is_root() {
-        read_root(filename)
+        append_root(filename, data)
     } else {
         result
     }
@@ -386,6 +460,35 @@ mod tests {
         let read_data = result.unwrap();
         assert_eq!(write_data, read_data);
 
+        command_try("rm", [file_name])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_root() -> Result<(), Box<dyn Error>> {
+        set_allow_sudo(true);
+
+        let file_name = "/tmp/test_append_root.txt";
+        let write_data = vec![
+            72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 10,
+        ]; // "Hello, World!\n"
+        write_sudo(&file_name, &write_data[..4])?;
+        append_sudo(&file_name, &write_data[4..])?;
+        assert_file_permission(&file_name, true);
+        let result = read_root(&file_name);
+        assert!(result.is_ok());
+        let read_data = result.unwrap();
+        assert_eq!(write_data, read_data);
+        command_try("rm", [file_name])?;
+
+        let file_name = "/tmp/test_append_user.txt";
+        write(&file_name, &write_data[..4])?;
+        append(&file_name, &write_data[4..])?;
+        let result = read(&file_name);
+        assert!(result.is_ok());
+        let read_data = result.unwrap();
+        assert_eq!(write_data, read_data);
         command_try("rm", [file_name])?;
 
         Ok(())
